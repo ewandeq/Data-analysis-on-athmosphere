@@ -1,0 +1,1585 @@
+---
+title: "Data Analysis Project"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    toc_depth: 4
+    number_sections: yes
+  pdf_document:
+    toc: yes
+    toc_depth: '4'
+header-includes: \usepackage{comment}
+params:
+  soln: yes
+---
+
+```{r setup, include=FALSE,fig.height=8}
+knitr::opts_chunk$set(echo = TRUE , fig.width = 15,   # Figure width in inches
+  fig.height = 9 ) # Figure height in inches
+options(warn=-1)
+
+# Increase the plot display size
+options(repr.plot.width=10, repr.plot.height=7)
+
+
+```
+
+# Importing Libraries and Data
+
+We import the libraries needed throughout the project.
+
+```{r,include=FALSE,echo=T,eval=T}
+# Install and load ggmap and ggplot2
+library(leaps)
+library(MASS)
+library(corrplot)
+library(glmnet)
+library(coefplot)
+library(ggplot2) 
+library(leaflet)
+library(gridExtra)
+library(ggfortify)
+library(FactoMineR)
+library(plotly)
+library(factoextra)
+library(reshape2)
+library(ggplot2)
+library(mclust)
+library(plotly)
+library(ggpubr)
+library(MASS)
+library(caret)
+library(cluster)
+library(clusterSim)
+```
+
+```{r,include=T,echo=T,eval=T}
+data = read.csv("./data/Data-projetmodIA-2324.csv")
+data = as.data.frame(data)
+```
+
+# Data Preparation
+
+Let's take a first look at our dataset using the `str` function, which displays the different variables and their types.
+
+```{r,results=F,echo=F,eval=T}
+str(data)
+```
+```{r,results=F,echo=F,eval=T}
+nbcol = ncol(data)
+nbligne = nrow(data)
+ind_quan = c(4:14,nbcol-1,nbcol)
+ind_qual = c(1:3,15:(nbcol-2))
+ind_pol =  c(4:14)
+
+```
+
+```{r,results=F,echo=F,eval=T}
+for (ind in ind_qual){
+  data[,ind] = as.factor(data[,ind])
+}
+```
+
+```{r,results=F,echo=T,eval=T}
+df=data
+to_tonnes =c('nox_kg','so2_kg','pm10_kg','pm25_kg','co_kg','c6h6_kg','nh3_kg','ges_teqco2')
+name_to_tonne=c('nox_t','so2_t','pm10_t','pm25_t','co_t','c6h6_t','nh3_t','ges_teqco2')
+df[to_tonnes] = df[to_tonnes]/1000
+colnames(df[to_tonnes]) = name_to_tonne
+colnames(df)[c(4:11)] = name_to_tonne
+df$ch4_t_lda = ifelse(df$ch4_t > 1000, "Above", "Below")
+ind_qual = c(ind_qual , 37)
+
+rm(name_to_tonne,to_tonnes)
+```
+
+The initial dataset contains 984 observations and 36 variables. We converted the qualitative variables to factors using the `Factor` command. In addition, to ensure consistent units of measurement, all variables were converted to tonnes, simplifying the analysis and interpretation of the data.
+
+# Descriptive Analysis
+
+## Missing Values
+
+We checked the dataset for missing values using the `sum(is.na())` function, and the command indicates that no missing values were detected.
+
+```{r,results=F,echo=F,eval=T}
+sum(is.na(df))
+```
+
+## Boxplots and Outliers
+
+### Raw Data
+
+To detect outliers, let's plot boxplots for the different variables.
+
+```{r,include=T,echo=T,eval=T}
+boxplot(df[,ind_pol],main='Boxplots of Our Quantitative Variables')
+
+```
+
+> To detect outliers and visualize the data distribution, we generated boxplots for each variable in the dataset. Most of the boxplots appear compressed, with a median close to 0. We also note that, apart from the variable **Co2_t**, the quartiles are very difficult to distinguish. However, the variable **co2_t** contains many outliers and has the largest variance among all variables. An in-depth analysis based only on the current dataset would therefore focus mainly on the variable "co2_t", resulting in a significant loss of information.
+
+### Log-Transformed Data
+
+> To improve the visualization of our variables, we decided to apply a logarithmic transformation. This transformation makes the data distribution easier to visualize and reduces the impact of outliers, particularly for the variable **co2\_t** which previously contained a large number of outliers.
+
+```{r,include=T,echo=T,eval=T}
+df[,ind_pol]=log(df[,ind_pol])
+boxplot(df[,ind_pol],main='Boxplots of Our Quantitative Variables')
+```
+
+### Centered and Scaled Data
+
+> After applying the logarithmic transformation, the variable boxplots are clearer and have nearly uniform sizes, indicating a homogeneous dispersion of the data. Each variable still contains a few outliers. Since all data are now expressed on a comparable scale after the logarithmic transformation, we will center and scale the data. This step improves comparability by placing the variables on a common scale, enabling a more consistent and relevant analysis.
+
+```{r,include=T,echo=T,eval=T}
+df[,ind_pol] = scale(df[,ind_pol],center=TRUE,scale=TRUE)
+boxplot(df[,ind_pol])
+```
+
+> After centering the data, the variable boxplots have a similar shape, highlighting comparable distributions. However, a few outliers remain. To preserve the consistency of our analysis, we decided not to remove these outliers.
+
+```{r,results=F,echo=F,eval=T}
+remove_outliers <- function(data_frame,columns) {
+  # Define the interquartile-range (IQR) scale factor
+  iqr_factor <- 1.5
+
+  # Apply the quantile rule to each column
+    for (col in columns) {
+      # Calculate the quantiles
+      q1 <- quantile(data_frame[[col]], 0.15)
+      q3 <- quantile(data_frame[[col]], 0.85)
+  
+      # Calculate the IQR
+      iqr <- q3 - q1
+  
+      # Calculate the limits
+      lower_limit <- q1 - iqr_factor * iqr
+      upper_limit <- q3 + iqr_factor * iqr
+  
+      # Remove outliers
+      data_frame <- data_frame[data_frame[[col]] >= lower_limit & data_frame[[col]] <= upper_limit, ]
+    }
+  return(data_frame)
+}
+#df = remove_outliers(df,colnames(df)[ind_pol])
+```
+
+## Univariate Analysis
+
+### Quantitative Variables
+
+To analyze the quantitative variables, we plan to generate a histogram for each variable. To optimize space, we will display only one or a few representative histograms. This approach provides a concise but meaningful view of the data distribution and makes the main trends and characteristics of each variable easier to interpret.
+
+#### Histograms of Quantitative Variables
+
+To build our histograms, we selected the **`Freedman-Diaconis`** method. This adaptive bin-width approach provides a more accurate representation of the data distribution. The histograms generally suggest an approximately Gaussian distribution for most variables. This characteristic supports the potential use of parametric statistical analyses and strengthens the reliability of the results obtained in this study.
+
+```{r,include=T,echo=T,eval=T}
+# Use a list to store ggplot objects
+Graphe <- list()  
+# Number of graphs to plot
+nb_graph <- 4  
+nrows <- 2  
+ncols <- 2  
+
+for (var in ind_pol[1:4]) {
+  fd_binwidth <- (2 * IQR(df[, var])) / (length(df[, var])^(1/3))
+  
+  # Create the histogram with ggplot2
+  p <- ggplot(df, aes_string(x = colnames(df)[var])) +
+    geom_histogram(binwidth = fd_binwidth, fill = "blue", color = "black", alpha = 0.5) +
+    labs(title = paste("Histogram of Variable", colnames(df)[var]),
+         x = colnames(df)[var], y = "Frequency")
+  
+  Graphe[[length(Graphe) + 1]] <- p
+  rm(p, fd_binwidth)
+}
+
+# Use grid.arrange outside the loop to arrange the plots
+grid.arrange(grobs = Graphe, ncol = ncols, nrow = nrows)
+rm(Graphe,nrows,ncols,nb_graph,var)
+```
+
+### Qualitative Variables
+
+#### Bar Plots of Our Qualitative Variables
+
+```{r,include=T,echo=F,eval=T}
+generate_barplot <- function(variable) {
+  Result = ggplot(df_qual, aes_string(x = colnames(df_qual)[variable])) +
+    geom_bar(fill = "blue", color = "black", alpha = 0.7) +
+    geom_text(stat = "count", aes(label = after_stat(count)), vjust = -0.5, color = "black") +  # Add text labels
+    labs(title = paste("Barplot of Variable", colnames(df_qual)[variable]),
+         x = colnames(df_qual)[variable], y = "Count") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  
+  return(Result)
+}
+```
+
+```{r,include=T,echo=T,eval=T}
+# Assume that df is the data frame and qual_barplot contains the indices of the qualitative variables
+qual_barplot <- c(3, 15, 16)
+
+# Select the qualitative columns
+df_qual <- df[, qual_barplot]
+
+Plots = list()
+# Display the bar plots separately
+for (i in seq_along(qual_barplot)) {
+  Plots[[length(Plots) + 1]] <- generate_barplot(i)
+  
+}
+
+grid.arrange(grobs = Plots[1:2], ncol = 2, nrow = 1)
+
+print(Plots[[3]])
+
+
+rm(Plots,qual_barplot,df_qual,i)
+
+
+```
+
+We plotted bar charts for several qualitative variables to examine the distribution of their categories. The number of observations per year is evenly distributed. For the variable "TypeEPCI", the CC category is the most frequent, followed closely by CA. A substantial imbalance is also observed across departments, with greater representation in some departments, such as Aveyron, Hérault, and Gers, than in others. These preliminary observations provide useful information for understanding the data distribution in our analysis.
+
+#### 2D Maps by EPCI Type
+
+```{r, include=T, echo=T, eval=T, fig.height=6}
+plotmapquali<-function(dataposition,latit,longit,varquali){
+library(leaflet)
+
+factpal <- colorFactor(topo.colors(nlevels(varquali)), varquali)
+
+leaflet(dataposition,width = NULL,height = NULL) %>%
+  addTiles() %>%
+  addCircleMarkers(radius = 5,color = factpal(varquali),stroke = FALSE, fillOpacity = 0.9,lat = ~latit, lng = ~longit)%>%
+addLegend("bottomright", pal = factpal, values = varquali, opacity = 1)
+}
+
+
+plotmapquali(df[,c("latit","longit")] , 'latit','longit',df$TypeEPCI)
+```
+
+Metropolises appear to be associated with large cities such as *Montpellier* and *Toulouse*, *Urban Communities* (*CU*) with urbanized areas such as Perpignan, *Agglomeration Communities* (*CA*) with groups of scattered small towns, and *Communities of Municipalities* (*CC*) with more rural communities.
+
+## Bivariate Analysis
+
+```{r,fig.height=9,include=T,echo=T,eval=T}
+corrplot.mixed(round(cor(df[,ind_quan]),2),lower = 'ellipse',upper='number',bg = "black")
+```
+
+> A correlation analysis of the different pollutants reveals strong positive associations. Significant relationships were observed, including those between CO (carbon monoxide) concentrations and *PM25* (fine particulate matter), between *CO* and *C6H6* (benzene), as well as between *CO2* and *GES\_teqCO2* (the CO2 equivalent of greenhouse gases), and between *CO2* and *NOx* (nitrogen oxides). It is worth noting that no substantial negative correlations were observed among the pollutants in our dataset.
+
+# Factorial Methods
+
+## Principal Component Analysis
+
+> We will now perform a Principal Component Analysis (PCA) on our dataset. This multivariate statistical technique reduces the dimensionality of the dataset while preserving most of its variance. PCA helps identify trends and relationships among variables and highlights the principal components that contribute most to data variability. This approach is essential for gaining a deeper understanding of the underlying structure of the dataset.
+
+```{r,include=F,echo=T,eval=T}
+acp_result <- PCA(df,quali.sup= ind_qual, graph = FALSE)
+```
+
+### Explained Variance
+
+```{r,include=T,echo=T,eval=T}
+
+#barplot(acp_result$eig[,2], main="Explained Variance (%)", names.arg=paste("Dim",1:nrow(acp_result$eig)))
+
+# Sort rows by decreasing dimension order
+df_variance <- as.data.frame(acp_result$eig)
+df_variance <- df_variance[order(df_variance[,2], decreasing = TRUE), ]
+df_variance$Dimension <- factor(rownames(df_variance), levels = rownames(df_variance))
+
+
+# Create the explained-variance plot
+p1 = ggplot(df_variance, aes(x = Dimension, y = df_variance[,2])) +
+  geom_bar(stat = "identity", fill = "blue") +
+  labs(title = "Explained Variance (%) for Our PCA", x = "Dimensions", y = "Explained Variance")
+
+# Sort rows by increasing dimension order
+df_variance <- df_variance[order(df_variance[,3]), ]
+
+#barplot(acp_result$eig[,3], main="Cumulative Explained Variance (%)", names.arg=paste("Dim",1:nrow(acp_result$eig)))
+# Create the cumulative explained-variance plot and add a horizontal line at 90%
+p2 = ggplot(df_variance, aes(x = Dimension, y = df_variance[,3])) +
+  geom_bar(stat = "identity", fill = "blue") +
+  labs(title = "Cumulative Explained Variance (%) for Our PCA, with the Red Line at 90%", x = "Dimensions", y = "Cumulative Explained Variance") +
+  geom_hline(yintercept = 90, color = "red", linetype = "dashed", linewidth = 1)
+
+grid.arrange(p1, p2, ncol = 2)
+
+rm(df_variance, p1, p2)
+
+  
+#abline(h=90,col='red')
+```
+
+> These plots show that retaining three principal components preserves nearly 90% of the total inertia of the dataset. This substantial amount of retained inertia indicates that these three components effectively capture most of the variability in the data. Selecting these principal components therefore reduces dimensionality while preserving essential information, enabling a more concise and relevant interpretation of the underlying data structure.
+
+### Observation Plot
+
+```{r,fig.height=7,include=T,echo=T,eval=T}
+
+gg_indiv1 <- ggplot(as.data.frame(acp_result$ind$coord), aes(x = Dim.1, y = Dim.2, colour = df$annee_inv)) +
+  geom_point(size = 2) +
+  labs(title = "Observation Plot in the First Factorial Plane (Dim.1, Dim.2), Colored by Observation Year", color = "Observation Year") +
+  theme_minimal()
+
+
+gg_indiv2 <- ggplot(as.data.frame(acp_result$ind$coord), aes(x = Dim.1, y = Dim.2, colour = df$TypeEPCI)) +
+  geom_point(size = 1.5) +
+  labs(title = "Observation Plot in the First Factorial Plane (Dim.1, Dim.2), Colored by EPCI Type", color = "EPCI Type") +
+  theme_minimal()
+
+
+grid.arrange(gg_indiv1, gg_indiv2, nrow = 2)
+
+rm(gg_indiv1, gg_indiv2)
+```
+
+> The first plot shows the projection of observations onto the first factorial plane formed by the first two principal components, colored by year. An important observation is that the years do not form distinct groups. For a given EPCI year, the full range of pollution levels is represented. We therefore conclude that pollutant emission levels did not follow a monotonic trend over time.
+
+> The second plot shows the projection of observations onto the first two principal components, colored by EPCI type. A clear pattern emerges, with observations of the same EPCI type tending to group together. CC-type EPCIs, shown in green, are concentrated on the left side of the plot, followed by CU, then CA on the right, and finally Metropolises farther to the right.
+
+> It is worth noting the presence of CC-type outliers on the left side of both plots. These atypical observations were recorded in different years and could be examined further to identify the factors contributing to these exceptional values.
+
+> We also note the presence of a few Metropolis-type outliers on the right side of the observation plot. These atypical observations were recorded in different years and could be examined further to identify the factors contributing to these exceptional values.
+
+### Removing Outliers
+
+```{r,include=F,echo=T,eval=T}
+df_reduced = as.data.frame(acp_result$ind$coord)
+df = df[!(df_reduced$Dim.1 < -10), ]
+#df = df[!(df_reduced$Dim.1 > 8), ]
+# Re-run PCA on df
+acp_result <- PCA(df,quali.sup= ind_qual, graph = FALSE)
+df_reduced = as.data.frame(acp_result$ind$coord)
+```
+### Variable Plot
+
+```{r,fig.height=8,include=T,echo=T,eval=T}
+# Visualize the contribution of variables to the first and second principal components
+f1 = fviz_pca_var(acp_result,
+             choice = "var", # Display variable contributions
+             axes = c(1, 2),  # Axes to visualize
+             title = "Contribution of Variables to Principal Components 1 and 2",
+             repel = TRUE)    # Use repel to prevent variable names from overlapping
+
+# Visualize the contribution of variables to the first and third principal components
+f2 = fviz_pca_var(acp_result,
+             choice = "var", # Display variable contributions
+             axes = c(1, 3),  # Axes to visualize
+             title = "Contribution of Variables to Principal Components 1 and 3",
+             repel = TRUE)    # Use repel to prevent variable names from overlapping
+grid.arrange(f1, f2, ncol = 2)
+
+rm(f1, f2)
+
+```
+
+> The principal components can be analyzed as linear combinations of the different variables as follows:
+
+$Dim_1 \propto 0.9 \cdot (pm10\_t + ges\_teqco2 + pm25\_t + nox\_t + c6h6\_t + co\_t + co2\_t + so2\_t)$
+
+$Dim2 \propto 0.55 \cdot \text{latit} + 0.7 \cdot (ch4_t + nh3_t + n2o_t) - 0.4 \cdot \text{longit}$
+
+$Dim3 \propto 0.6 \cdot \text{latit} + 0.8 \cdot \text{longit}$
+
+> The principal components obtained from our Principal Component Analysis (PCA) can be interpreted as specific linear combinations of the dataset variables. The first principal component (Dim1) is strongly influenced by greenhouse gases and several atmospheric pollutants, while the second principal component (Dim2) is associated with methane, ammonia, nitrous oxide, latitude, and longitude. The third principal component (Dim3) is mainly influenced by geographic coordinates (latitude and longitude). This decomposition provides a clear view of the contribution of each variable to the underlying structure of the data.
+
+### 2D Map Based on the First Two Dimensions
+
+```{r,include=F,echo=F,eval=T}
+plotmapquanti <- function(dataposition, latit, longit, varquanti) {
+  library(leaflet)
+  pal <- colorNumeric(palette = "RdYlBu", domain = varquanti, reverse = TRUE)
+  leaflet(dataposition) %>% 
+    addTiles() %>%
+    addCircleMarkers(radius = 3, color = pal(varquanti), stroke = FALSE, fillOpacity = 1, lat = ~latit, lng = ~longit) %>%
+    addLegend("bottomright", pal = pal, values = varquanti, opacity = 1)
+}
+```
+
+```{r,include=T,echo=T,eval=T,fig.height=6}
+df_reduced = as.data.frame(acp_result$ind$coord)
+plotmapquanti(df[, c('latit', 'longit')], 'latit', 'longit', df_reduced[, 1])
+```
+
+> The first component appears to represent an urbanity index, indicating that proximity to an urban area is positively correlated with a high index value. This pattern generally holds, although there are a few exceptions. Urbanization appears to be particularly associated with carbon monoxide (CO), fine particulate matter (PM10), the CO2 equivalent of greenhouse gases (GES\_teqCO2), nitrogen oxides (NOx), benzene (C6H6), and sulfur dioxide (SO2). These pollutants have higher levels in urban areas, highlighting the major role of urbanization in their increased presence in the atmosphere. Their presence is also associated with metropolises, urban communities, and agglomeration communities.
+
+```{r,include=T,echo=T,eval=T,fig.height=6}
+df_reduced = as.data.frame(acp_result$ind$coord)
+plotmapquanti(df[, c('latit', 'longit')], 'latit', 'longit', df_reduced[, 2])
+rm(df_reduced)
+```
+
+> The analysis based on the second dimension, proximity to the sea, suggests a significant relationship with pollution levels. Coastal areas, being closer to the sea, appear to have a greater capacity to absorb and store certain gases such as methane (CH4) and ammonia (NH3). Proximity to the sea may promote the dispersion of these gases, contributing to relatively lower pollution levels in these regions.
+
+> Conversely, as distance from the coast increases and areas extend farther inland, gas concentrations appear to rise, suggesting an inverse relationship with proximity to the sea. This pattern is especially pronounced in large cities, where concentrations of the gases mentioned above are generally higher.
+
+### Conclusion: Interpreting the Observation and Variable Plots
+
+> The concentration of CC-type EPCIs, shown by the green block on the left side of the observation plot, followed by CU and CA, can be interpreted together with the variable plot. A plausible conclusion is that CC-type EPCIs tend to have lower greenhouse-gas concentrations than other EPCI types, followed by CU and then CA. This suggests a potential relationship between EPCI type and pollution levels and provides a useful direction for further analysis.
+
+## Multiple Factor Analysis
+
+Because the two categories `Metropole` and `CU` contain very few observations compared with the other categories, we decided to combine them with the `CA` category into a single category called `CA_CU_Metropole`. This choice is justified in the following section.
+
+
+### Variable Discretization
+
+> Two options were considered for discretizing the variables: dividing them into equal-width intervals, even if category sizes differ, or using quantiles to create intervals with similar numbers of observations, although not necessarily equal widths.
+
+> The second option was preferred because it avoids categories with very small sample sizes. We initially applied equal-width discretization, but found that some resulting categories contained very few observations.
+
+```{r,results=F,echo=F,eval=T}
+discretize_quantile <- function(data, variables, nb_intervals, suffix_name_columns = "", prefix_name_columns = "", verbose = FALSE) {
+  alpha <- seq(0, 1, length.out = nb_intervals+1)
+  labels <- letters[1:nb_intervals]
+  n_col_ini = ncol(data)
+  for (var in variables) {
+    col_name <- paste(colnames(data)[var], suffix_name_columns)
+    col_name <- paste(prefix_name_columns, col_name)
+    
+    quantiles <- quantile(data[,var], probs = alpha)
+    
+    data[[col_name]] <- cut(data[[var]], breaks = quantiles, labels = labels, include.lowest = TRUE)
+    
+    if (verbose) {
+      cat("Variable:", var, "\n")
+      cat("Quantiles:", quantiles, "\n\n")
+    }
+  }
+  return(data)
+}
+discretize_equal_width <- function(data, variables, nb_intervals, suffix_name_columns = "", prefix_name_columns = "") {
+  labels <- letters[1:nb_intervals]
+  for (var in variables) {
+    # drop the last letter of the name
+    Column_Name = colnames(data)[var]
+    #Column_Name = substr(Column_Name, 1, nchar(Column_Name) - 2)
+    col_name <- paste(Column_Name, suffix_name_columns,sep = "_")
+    col_name <- paste(prefix_name_columns, col_name)
+    
+    
+    data[[col_name]] <- cut(data[[var]], breaks = nb_intervals, labels = labels, include.lowest = TRUE)
+    
+  }
+  return(data)
+}
+
+```
+
+```{r,results=F,echo=F,eval=T}
+df_mca = df
+df_mca = discretize_quantile(df_mca,ind_quan,3,suffix = "discr")
+#df_mca = discretize_equal_width(df_mca,ind_quan,3,suffix = "discr")
+df_mca$New_Type_EPCI = 'a'
+df_mca[df_mca$TypeEPCI == 'CU', 'New_Type_EPCI'] = 'CA_CU_Metropole'
+df_mca[df_mca$TypeEPCI == 'CC', 'New_Type_EPCI'] = 'CC'
+df_mca[df_mca$TypeEPCI == 'CA', 'New_Type_EPCI'] = 'CA_CU_Metropole'
+df_mca[df_mca$TypeEPCI == 'Metropole', 'New_Type_EPCI'] = 'CA_CU_Metropole'
+ind_mca = c(37:51)
+df_mca = df_mca[,ind_mca]
+```
+
+```{r,include=T,echo=T,eval=T}
+
+par(mfrow = c(2, 2))
+#for (ind in 1:ncol(df_mca)){
+for (ind in 2:5){
+  barplot(table(df_mca[[ind]]),main=colnames(df_mca)[ind])
+}
+rm(ind)
+```
+
+### Applying MCA
+
+```{r,include=T,echo=T,eval=T}
+# Apply MCA
+mca_result <- MCA(df_mca, graph = FALSE)
+```
+
+### Category Plots
+
+```{r,fig.height=7}
+plot(mca_result, axes = c(1, 2), choix = "ind", invisible = "ind", habillage = "quali", autoLab = "yes", graph.type = "ggplot",max.overlaps=500,palette=palette(rainbow(30)))
+
+rm(mca_result)
+```
+
+> The MCA analysis of the variables reveals three distinct groups.
+
+> The first group, located in the upper-left area, mainly contains type $a$ categories for most pollutants (*co_t*, *c6h6_t*, *co2_t*, *so2_t*, *pm25_t*, *pm10_t*, etc.).
+
+> The second group, located in the middle-right area, mainly contains type $c$ categories, corresponding to high pollution levels, for pollutants such as *pm25_t*, *c6h6_t*, *ges_teqco2*, *so2_t*, *co2_t*, and *nox_t*. In addition, the category (*CA_CU_Metropole*) is closer to this group, suggesting that CA-, CU-, and Metropolis-type EPCIs generally record relatively high pollution levels.
+
+> Finally, the category (*CC*) lies between the groups of type $b$ and type $a$ categories, indicating that this EPCI type generally records moderate pollution levels. This interpretation helps identify specific patterns associated with the different EPCI categories according to their pollution levels.
+
+## Linear Discriminant Analysis
+
+```{r,include=T,echo=T,eval=T}
+lda_columns = c(ind_quan,3,37)
+df_lda = df[lda_columns]
+df_lda$New_Type_EPCI = df_mca$New_Type_EPCI
+```
+
+#### LDA for EPCI Type
+
+```{r,include=T,echo=T,eval=T}
+lda_model_TypeEPCI <- lda(New_Type_EPCI ~., data = df_lda)
+lda_predictions_TypeEPCI <- predict(lda_model_TypeEPCI)
+```
+
+
+
+##### Confusion Matrix
+
+```{r,include=T,echo=T,eval=T}
+
+
+lda_TypeEPCI <- lda(New_Type_EPCI ~., data = df_lda)
+lda_predictions_TypeEPCI <- predict(lda_TypeEPCI)
+
+# Create the data frame containing predictions and classes
+df_plot <- data.frame(LD1 = lda_predictions_TypeEPCI$x[, 1],
+                      Classe = df_lda$New_Type_EPCI)
+
+# Confusion table
+predictions <- lda_predictions_TypeEPCI$class
+actual <- as.factor(df_lda$New_Type_EPCI)
+confusion_matrix <- confusionMatrix(predictions, actual)
+
+# Display a summary of the confusion matrix
+print(confusion_matrix$table)
+print(confusion_matrix$overall['Accuracy'])
+```
+
+##### Confusion Matrix Heatmap
+
+```{r,results=F,echo=F,eval=T}
+Compute_Margins = function(confusion_matrix,normalize=F){
+  row_margins = rowSums(confusion_matrix)
+  col_margins = colSums(confusion_matrix)
+  confusion_matrix = cbind( confusion_matrix,row_margins)
+  confusion_matrix = rbind( col_margins, confusion_matrix)
+  confusion_matrix[1,3] = sum(confusion_matrix[1:2,1:2])
+  colnames(confusion_matrix)[ncol(confusion_matrix)] = "Total"
+  rownames(confusion_matrix)[1] = "Total"
+  
+  if(normalize == 'columns'){
+    confusion_matrix = confusion_matrix / col_margins
+  }
+  else if(normalize == 'rows'){
+    confusion_matrix = confusion_matrix / row_margins
+  }
+  else if(normalize == 'total'){
+    confusion_matrix = confusion_matrix / sum(confusion_matrix)
+  }
+  
+  #Round numbers 
+  confusion_matrix = round(confusion_matrix,2)
+  return(confusion_matrix)
+}
+
+```
+
+```{r,include=T,echo=T,eval=T,warnings=FALSE}
+
+
+# Create the confusion matrix
+confusion_matrix = table(lda_predictions_TypeEPCI$class, df_lda$New_Type_EPCI)
+
+# Calculate the confusion-matrix margins
+confusion_matrix = Compute_Margins(confusion_matrix,normalize = F)
+
+
+# Add values inside the cells
+Trace = plot_ly(
+  x = colnames(confusion_matrix),
+  y = rownames(confusion_matrix),
+  z = confusion_matrix,
+  type = "heatmap",
+  colorscale = "Viridis",
+  text = confusion_matrix,
+  hoverinfo = "text"
+) %>%
+  layout(
+    title = "Confusion Matrix Normalized by Columns",
+    xaxis = list(title = "Actual Values"),
+    yaxis = list(title = "Predicted Values"),
+    annotations = list(
+      text = confusion_matrix, 
+      x = rep(colnames(confusion_matrix), each = nrow(confusion_matrix)),
+      y = rep(rownames(confusion_matrix), times = ncol(confusion_matrix)),
+      showarrow = FALSE,
+      font = list(color = "white")  # Change the annotation color
+    )
+  )
+
+Trace
+
+rm(Trace,confusion_matrix,lda_predictions_TypeEPCI,lda_TypeEPCI,df_plot,actual,predictions)
+```
+
+> First, we note that the correct classification rate is $95.72$%. This rate is very high, suggesting that the model predicts EPCI type effectively.
+
+> Next, we note that $110$ EPCIs of type *CA_CU_Metropole* were correctly classified, compared with $17$ misclassified observations, and that $808$ EPCIs of type *CC* were correctly classified, compared with $24$ misclassified observations. This suggests that the model predicts both *CA_CU_Metropole* and *CC* EPCIs effectively. The LDA model has more difficulty predicting *CA_CU_Metropole* than *CC*, which is reasonable because the *CA_CU_Metropole* category contains fewer observations than *CC*. \## LDA for Methane Threshold Exceedance
+
+### LDA for Methane Threshold Exceedance
+
+```{r,include=T,echo=T,eval=T}
+lda_model_ch4_t <- lda(ch4_t_lda~., data = df_lda)
+lda_predictions_ch4_t <- predict(lda_model_ch4_t)
+```
+
+### Confusion Matrix
+
+```{r,include=T,echo=T,eval=T}
+
+lda_dep_ch4 <- lda(ch4_t_lda~., data = df_lda)
+lda_predictions_dep1000ch4 <- predict(lda_dep_ch4)
+
+# Create the data frame containing predictions and classes
+df_plot <- data.frame(LD1 = lda_predictions_dep1000ch4$x[, 1],
+                      Classe = df_lda$ch4_t_lda)
+
+
+# Confusion table
+predictions <- lda_predictions_dep1000ch4$class
+actual <- as.factor(df_lda$ch4_t_lda)
+confusion_matrix <- confusionMatrix(predictions, actual)
+
+
+# Display a summary of the confusion matrix
+print(confusion_matrix$table)
+print(confusion_matrix$overall['Accuracy'])
+```
+
+
+
+> First, we note that the correct classification rate is $94.06$%. This rate is fairly high, suggesting that the model effectively predicts whether methane emissions exceed $1000$ tonnes per year.
+
+> Next, we note that $240$ methane measurements below $1000$ tonnes per year were correctly classified, compared with $11$ misclassified measurements, and that $662$ measurements were correctly classified, compared with $46$ misclassified measurements. This suggests that the model effectively predicts whether the $1000$-tonne annual threshold is exceeded.
+
+> We also note that the model has more difficulty predicting measurements above $1000$ tonnes per year than measurements below $1000$ tonnes per year.
+
+```{r,include=T,echo=T,eval=T}
+# Create the confusion matrix
+confusion_matrix = table(lda_predictions_ch4_t$class, df_lda$ch4_t_lda)
+
+
+confusion_matrix = Compute_Margins(confusion_matrix,normalize = F)
+confusion_matrix = round(confusion_matrix,2)
+
+# Add values inside the cells
+Trace = plot_ly(
+  x = colnames(confusion_matrix),
+  y = rownames(confusion_matrix),
+  z = confusion_matrix,
+  type = "heatmap",
+  colorscale = "Viridis",
+  text = confusion_matrix,
+  hoverinfo = "text"
+) %>%
+  layout(
+    title = "Confusion Matrix",
+    xaxis = list(title = "Actual Values"),
+    yaxis = list(title = "Predicted Values"),
+    annotations = list(
+      text = confusion_matrix, 
+      x = rep(colnames(confusion_matrix), each = nrow(confusion_matrix)),
+      y = rep(rownames(confusion_matrix), times = ncol(confusion_matrix)),
+      showarrow = FALSE,
+      font = list(color = "white")  # Change the annotation color
+    )
+  )
+
+# Display the plot
+Trace
+
+rm(Trace,confusion_matrix,lda_predictions_ch4_t,lda_dep_ch4,df_plot,actual,predictions,df_mca,df_lda,lda_columns,lda_model_ch4_t,lda_predictions_dep1000ch4,lda_model_TypeEPCI,lda_predictions_TypeEPCI,lda_TypeEPCI,lda_predictions_TypeEPCI)
+
+```
+
+# Clustering
+
+## Kmeans
+
+First, we determine the optimal number of clusters $k$. We use the within-cluster inertia method, the silhouette method, the Calinski-Harabasz method, and the Semi-Partial R-Squared coefficient.
+
+### Determining the Optimal Number of Clusters $k$
+
+```{r,include=F,echo=F,eval=T}
+df_kmeans = df[ind_pol]
+# fix the seed
+set.seed(1)
+```
+
+First, we calculate the different criteria. We then display the corresponding plots.
+
+#### Calculating the Change in Within-Cluster Inertia
+
+```{r, include=T,echo=F,eval=T}
+Kmin = 2
+Kmax<-15
+reskmeanscl<-matrix(0,nrow=nrow(df_kmeans),ncol=Kmax-1)
+Iintra<-NULL
+for (k in Kmin:Kmax){
+  resaux<-kmeans(df_kmeans,centers = k,nstart = 100)
+  reskmeanscl[,k-1]<-resaux$cluster
+  Iintra<-c(Iintra,resaux$tot.withinss)
+}
+
+df_intra<-data.frame(K=Kmin:Kmax,Iintra=Iintra)
+#ggplot(df_intra,aes(x=K,y=Iintra))+geom_line()+geom_point(size=1)+xlab("Number of Clusters")+ylab("Within-Cluster Inertia") + labs(title = "Change in Within-Cluster Inertia by Number of Cluster Centers.")
+```
+
+#### Calculating the Silhouette Coefficient
+
+```{r,include=T,echo=F,eval=T}
+Kmin = 2
+Kmax= 15
+Silhou<-NULL
+for (k in 2:Kmax){
+  aux<-silhouette(reskmeanscl[,k-1],daisy(df_kmeans))
+  Silhou<-c(Silhou,mean(aux[,3]))
+}
+df_silh<-data.frame(K=Kmin:Kmax,Silhouette=Silhou)
+#ggplot(df_silh,aes(x=K,y=Silhouette))+ geom_point()+ geom_line()+theme(legend.position = "bottom")
+
+#aux<-silhouette(reskmeanscl[,1],daisy(df_kmeans))
+#fviz_silhouette(aux)+theme(plot.title = element_text(size =9))
+```
+
+#### Calculating the Calinski-Harabasz Coefficient
+
+```{r,include=R,echo=F,eval=T}
+Kmin = 2
+Kmax<-15
+reskmeanscl<-matrix(0,nrow=nrow(df_kmeans),ncol=Kmax-1)
+Calin<-NULL
+for (k in Kmin:Kmax){
+  resaux<-kmeans(df_kmeans,centers = k)
+  reskmeanscl[,k-1]<-resaux$cluster
+  Iintra = resaux$tot.withinss
+  Iinter = resaux$betweenss
+  coef = (Iinter/(k-1))/(Iintra/(nrow(df_kmeans)-k))
+  Calin<-c(Calin,coef)
+}
+
+df_Calin<-data.frame(K= Kmin:Kmax,Calin_Coef=Calin)
+#ggplot(df_Calin,aes(x=K,y=Calin_Coef))+geom_line()+geom_point(size=1)+xlab("Number of Clusters")+ylab("Within-Cluster Inertia") + labs(title = "Calinski-Harabasz Coefficient by Number of Cluster Centers.")
+```
+
+#### Calculating Semi-Partial R-Squared
+
+```{r,include=T,echo=F,eval=T}
+Kmin = 2
+Kmax <- 15
+reskmeanscl <- matrix(0, nrow = nrow(df_kmeans), ncol = Kmax - 1)
+List_I_intra <- NULL
+SPRSQR <- NULL
+Aux <- df_kmeans - colMeans(df_kmeans)
+I_totale <- sum(apply(Aux, 1, function(row) norm(row, type = "2")))
+
+
+for (k in Kmin:Kmax) {
+  resaux <- kmeans(df_kmeans, centers = k)
+  reskmeanscl[, k - 1] <- resaux$cluster
+  I_intra <- resaux$tot.withinss
+  List_I_intra <- c(List_I_intra, I_intra)
+  
+  if (k > Kmin) {
+    coef <- (List_I_intra[k-Kmin] - List_I_intra[k-Kmin+1]) / I_totale
+    SPRSQR <- c(SPRSQR, coef)
+  }
+}
+
+
+df_SPRSQR <- data.frame(K = (Kmin+1):Kmax, SPRSQR_Coef = SPRSQR)
+#ggplot(df_SPRSQR, aes(x = K, y = SPRSQR_Coef)) +geom_line() + geom_point(size = 1) +xlab("Number of Clusters") +ylab("Within-Cluster Inertia") +labs(title = "Semi-Partial R-Squared Coefficient by Number of Cluster Centers.")
+
+
+```
+
+#### Displaying the Plots
+
+```{r,fig.widht=15, include=T,echo=T,eval=T}
+# Plot 1: Within-Cluster Inertia
+p1 <- ggplot(df_intra, aes(x=K, y=Iintra)) +
+  geom_line(color="blue") +
+  geom_point(size=1) +
+  xlab("Number of Clusters") +
+  ylab("Within-Cluster Inertia") +
+  labs(title = "Within-Cluster Inertia by Number of Cluster Centers")+
+  theme(plot.title = element_text(size = 10))  # Adjust the size as preferred
+
+# Plot 2: Silhouette Coefficient
+p2 <- ggplot(df_silh, aes(x=K, y=Silhouette)) +
+  geom_line(color="red") +
+  geom_point(size=1)+
+  xlab("Number of Clusters") +
+  ylab("Silhouette Score") +
+  labs(title = "Silhouette Coefficient by Number of Cluster Centers")+
+  theme(plot.title = element_text(size = 10))  # Adjust the size as preferred
+
+# Plot 3: Calinski-Harabasz Coefficient
+p3 <- ggplot(df_Calin, aes(x=K, y=Calin_Coef)) +
+  geom_line(color="darkgreen") +
+  geom_point(size=1)+
+  xlab("Number of Clusters") +
+  ylab("Calinski-Harabsz") +
+  labs(title = "Calinski-Harabasz Coefficient by Number of Cluster Centers")+
+  theme(plot.title = element_text(size = 10))  # Adjust the size as preferred
+
+# Plot 4: Semi-Partial R-Squared Coefficient
+p4 <- ggplot(df_SPRSQR, aes(x=K, y=SPRSQR_Coef)) +
+  geom_line(color="darkorange") +
+  geom_point(size=1)+
+  xlab("Number of Clusters") +
+  ylab("Semo_Partial_Rsquare") +
+  labs(title = "Semi-Partial R-Squared Coefficient by Number of Cluster Centers")+
+  theme(plot.title = element_text(size = 10))  # Adjust the size as preferred
+
+# Arrange the plots in a 2x2 grid
+grid.arrange(p1, p2, p3, p4, ncol=2)
+
+rm(p1,p2,p3,p4,df_intra,df_silh,df_Calin,df_SPRSQR,Iintra,Silhou,Calin,SPRSQR,List_I_intra,Aux,I_totale,Kmin,Kmax,reskmeanscl,I_intra,coef,resaux,k)
+```
+
+
+> The different methods for selecting the optimal number of clusters $K$ produce fairly different results.
+>
+> -   *Within-Cluster Inertia:*
+>
+>     An elbow is observed at $K=5$, suggesting that $K=5$ is a suitable number of clusters.
+>
+> -   *Silhouette Criterion:*
+>
+>     The silhouette coefficient reaches its maximum at $K=2$. The silhouette criterion clearly tends to favor a relatively small number of clusters. However, the silhouette coefficient at $K=5$ is a local maximum and is fairly close to the value at $K=2$.
+>
+> -   *Calinski-Harabasz:*
+>
+>     The Calinski-Harabasz coefficient reaches its maximum at $K=2$. However, the value at $K=5$ is the second-highest and is fairly close to the value at $K=2$.
+>
+> -   *Semi-Partial R-Squared:*
+>
+>     The Semi-Partial R-Squared coefficient shows its largest decrease at $K=4$.
+
+We therefore decided to use $K=5$ clusters.
+
+```{r}
+reskmeans_def = kmeans(df_kmeans,centers = 5,nstart = 1000)
+df_kmeans['Cluster_Kmeans_5_Centers'] = reskmeans_def$cluster
+fviz_cluster(reskmeans_def,data=df_kmeans,axes=c(1,2),ellipse.type = "norm",labelsize = 8,geom=c("point"))
+```
+
+
+> We observe a fairly clear separation between the five clusters, although the confidence ellipses overlap in some areas.
+
+> One cluster is located to the right of PCA axis 1 and near the center of PCA axis 2. This cluster appears to be characterized by high measurements of pollutants strongly correlated with PCA axis 1, including *co_t*, *c6h6_t*, *co2_t*, *so2_t*, *pm25_t*, and *pm10_t*, which are associated with greenhouse-gas emissions.
+
+> Two distinct clusters lie near the center of PCA axis 1. The first is located at the top of PCA axis 2, while the second lies near its center. Both clusters are characterized by average measurements of pollutants strongly correlated with PCA axis 1. However, unlike the second cluster, the first contains relatively high measurements of the correlated gases.
+
+> Finally, the other two clusters are located on the left side of the plot, one above and one below. This suggests that they consist of relatively low measurements of pollutants strongly correlated with PCA axis 1.
+
+
+Let's examine whether the resulting clusters are correlated with EPCI types.
+
+```{r,include=T,echo=T,eval=T}
+Rand_Type_EPCI=adjustedRandIndex(reskmeans_def$cluster,df$TypeEPCI)
+Rand_Type_EPCI
+
+```
+> The `adjustedRandIndex` value is `r (round(Rand_Type_EPCIadjustedRandIndex))`, suggesting that the resulting clustering is not correlated with EPCI type.
+
+#### Visualizing the Clusters on a Map
+
+> The clustering appears effective with respect to the PCA dimensions, showing a relatively clear separation between classes, although slight overlaps remain, especially in the two-dimensional rather than three-dimensional projection. The Adjusted Rand Index, which measures similarity between the K-means classification and EPCI type, is 0.11, indicating a weak correlation between the two.
+
+```{r,include=T,echo=T,eval=T}
+plotmapquali <- function(dataposition, latit, longit, varquali) {
+  library(leaflet)
+
+  # Convert to a factor and specify the levels
+  varquali_factor <- factor(varquali, levels = unique(varquali))
+
+  factpal <- colorFactor(topo.colors(length(levels(varquali_factor))), varquali_factor)
+
+  leaflet(dataposition) %>% 
+    addTiles() %>%
+    addCircleMarkers(radius = 5, color = ~factpal(varquali_factor), stroke = FALSE, fillOpacity = 0.9, lat = ~latit, lng = ~longit) %>%
+    addLegend("bottomright", pal = factpal, values = ~varquali_factor, opacity = 1)
+}
+
+# Usage example
+df_kmeans$Cluster_Kmeans_5_Centers <- as.factor(df_kmeans$Cluster_Kmeans_5_Centers)
+plotmapquali(df[, c("latit", "longit")], 'latit', 'longit', df_kmeans$Cluster_Kmeans_5_Centers)
+
+
+```
+
+# NOT GOOD
+> Geographically, cluster 1 is located mainly near the coast and is the most clearly separated from the others, indicating high concentrations along the second PCA axis. Cluster 2 appears to correspond mainly to urban areas. Cluster 4 is located primarily in the northern part of the study area, while cluster 3 is more widely dispersed throughout the region. These observations reinforce the idea that clustering may be associated with specific geographic characteristics and highlight the relevance of this approach for understanding the underlying structure of the data.
+
+## Hierarchical Clustering
+
+First, we select a dissimilarity measure by plotting the dendrograms corresponding to the different measures.
+
+```{r,include=T,echo=F,eval=T}
+df_hierarchique = df[ind_pol]
+Norm_Chosen = "euclidean"
+dist_matrix <- dist(df_hierarchique, method = Norm_Chosen)
+List_Dissimilarities = c("single", "complete", "average", "ward.D2")
+res_hc_single = hclust(dist_matrix, method = List_Dissimilarities[1])
+res_hc_complete = hclust(dist_matrix, method = List_Dissimilarities[2])
+res_hc_average = hclust(dist_matrix, method = List_Dissimilarities[3])
+res_hc_ward = hclust(dist_matrix, method = List_Dissimilarities[4])
+```
+
+```{r,include=T,echo=T,eval=T,warnings=FALSE}
+d1=fviz_dend(res_hc_single, cex = 0.6, main = "Cluster Dendogramm with Single Dissimilarity",labels=FALSE,k=4)
+d2=fviz_dend(res_hc_complete, cex = 0.6, main = "Cluster Dendogramm with Complete Dissimilarity",labels=FALSE,k=4)
+d3=fviz_dend(res_hc_average, cex = 0.6, main = "Cluster Dendogramm with Average Dissimilarity",labels=FALSE,k=4)
+d4=fviz_dend(res_hc_ward, cex = 0.6, main = "Cluster Dendogramm with Ward Dissimilarity",labels=FALSE,k=4)
+ggarrange(d1, d2, d3, d4, ncol = 2, nrow = 2)
+```
+
+> A pronounced chaining effect is observed for clustering based on single linkage. In contrast, complete linkage, Ward's method, and average linkage do not show this chaining effect.
+
+> The dendrograms obtained with single, complete, and average linkage form clusters with fairly uneven sizes. In contrast, the dendrogram obtained with Ward's method forms more balanced clusters.
+
+> It is essential to determine the optimal number of clusters. We therefore select Ward's method, which merges clusters so as to minimize the increase in within-cluster inertia.
+
+### Determining the Optimal Number of Clusters $k$
+
+#### Calculating Within-Cluster Inertia
+
+```{r, results=F,echo=T,eval=T}
+Kmin = 2
+Kmax <- 15
+Iintra_hierarchical <- numeric(Kmax - Kmin)
+
+for (k in Kmin:Kmax) {
+  cutree_clusters <- cutree(res_hc_ward, k = k)
+  total_withinss <- 0
+  for (i in 1:k) {
+    cluster_points <- which(cutree_clusters == i)
+    cluster_data <- df_hierarchique[cluster_points, ]
+    Center = colMeans(cluster_data)
+    total_withinss <- total_withinss + sum( apply(cluster_data, 1, function(row) norm(row - Center, type = "2")) )
+  }
+
+  Iintra_hierarchical[k - 1] <- total_withinss
+}
+
+df_intra_hierarchical <- data.frame(K = Kmin:Kmax, Iintra = Iintra_hierarchical)
+
+
+
+#ggplot(df_intra_hierarchical, aes(x = K, y = Iintra)) +geom_line() +geom_point(size = 1) +xlab("Number of Clusters") +ylab("Within-Cluster Inertia") +labs(title = "Change in Within-Cluster Inertia by Number of Clusters for Hierarchical Clustering.")
+
+```
+
+#### Silhouette
+
+```{r}
+Kmin = 2
+Kmax <- 15
+Silhou <- numeric(Kmax - Kmin)
+
+for (k in 2:Kmax) {
+  cutree_clusters <- cutree(res_hc_ward, k = k)
+  Silhou[k - 1] <- index.S(dist_matrix, cutree_clusters)
+}
+
+df_silh_hierarchical <- data.frame(K = Kmin:Kmax, Silhouette = Silhou)
+
+#ggplot(df_silh_hierarchical, aes(x = K, y = Silhouette)) +geom_line() +geom_point(size = 1) +xlab("Number of Clusters") +ylab("Silhouette Score") +labs(title = "Silhouette Coefficient by Number of Clusters for Hierarchical Clustering.")
+
+
+```
+
+#### Calinski-Harabasz
+
+```{r}
+Kmin = 2
+Kmax <- 15
+Calin <- NULL
+
+for (k in Kmin:Kmax) {
+  cutree_clusters <- cutree(res_hc_ward, k = k)
+
+  coef = index.G1(df_hierarchique, cutree_clusters, dist_matrix)
+  Calin = c(Calin, coef)
+}
+
+
+df_Calin_hierarchical <- data.frame(K = Kmin:Kmax, Calin_Coef = Calin)
+
+
+#ggplot(df_Calin_hierarchical, aes(x = K, y = Calin_Coef)) +geom_line() +geom_point(size = 1) +xlab("Number of Clusters") +ylab("Calinski-Harabasz Coefficient") +labs(title = "Calinski-Harabasz Coefficient by Number of Clusters for Hierarchical Clustering.")
+```
+
+#### Semi-Partial-Rsquare
+
+```{r}
+Kmin = 2
+Kmax <- 15
+SPRSQR <- NULL
+
+# K-means with one cluster
+reskmeanscl <- kmeans(df_hierarchique, centers = 1)
+I_totale <-  sum(reskmeanscl$withinss)
+for (k in Kmin:Kmax) {
+  cutree_clusters <- cutree(res_hc_ward, k = k)
+  I_intra <- Iintra_hierarchical[k - 1]
+  if (k > Kmin) {
+    coef <- (Iintra_hierarchical[k - 2] - I_intra) / I_totale
+    SPRSQR <- c(SPRSQR, coef)
+  }
+}
+
+
+df_SPRSQR_hierarchical <- data.frame(K = (Kmin+1):Kmax, SPRSQR_Coef = SPRSQR)
+
+
+#ggplot(df_SPRSQR_hierarchical, aes(x = K, y = SPRSQR_Coef)) +geom_line() +geom_point(size = 1) +xlab("Number of Clusters") +ylab("Semi-Partial R-Squared Coefficient") +labs(title = "Semi-Partial R-Squared Coefficient by Number of Clusters for Hierarchical Clustering.")
+
+```
+
+#### Displaying the Plots
+
+```{r,fig.widht=15, include=T,echo=T,eval=T}
+# Ensure that the gridExtra library is installed
+# install.packages("gridExtra")
+library(gridExtra)
+
+p1 <- ggplot(df_intra_hierarchical, aes(x=K, y=Iintra)) +
+  geom_line(color="blue") +
+  geom_point(size=1) +
+  xlab("Number of Clusters") +
+  ylab("Within-Cluster Inertia") +
+  labs(title = "Within-Cluster Inertia by Number of Clusters for Hierarchical Clustering")+
+  theme(plot.title = element_text(size = 10))  # Adjust the size as preferred
+
+# Plot 2
+p2 <- ggplot(df_silh_hierarchical, aes(x=K, y=Silhouette)) +
+  geom_line(color="red") +
+  geom_point(size=1) +
+  xlab("Number of Clusters") +
+  ylab("Silhouette Score") +
+  labs(title = "Silhouette Coefficient by Number of Clusters for Hierarchical Clustering")+
+  theme(plot.title = element_text(size = 10))  # Adjust the size as preferred
+
+
+# Plot 3
+p3 = ggplot(df_Calin_hierarchical, aes(x=K, y=Calin_Coef)) +
+  geom_line(color="darkgreen") +
+  geom_point(size=1) +
+  xlab("Number of Clusters") +
+  ylab("Calinski-Harabasz Coefficient") +
+  labs(title = "Calinski-Harabasz Coefficient by Number of Clusters for Hierarchical Clustering")+
+  theme(plot.title = element_text(size = 10))  # Adjust the size as preferred
+
+
+# Plot 4
+p4 <- ggplot(df_SPRSQR_hierarchical, aes(x=K, y=SPRSQR_Coef)) +
+  geom_line(color="darkorange") +
+  geom_point(size=1) +
+  xlab("Number of Clusters") +
+  ylab("Coefficient Semi_Partial_Rsquare") +
+  labs(title = "Semi-Partial R-Squared Coefficient by Number of Clusters for Hierarchical Clustering")+
+  theme(plot.title = element_text(size = 10))  # Adjust the size as preferred
+
+# Arrange the plots in a 2x2 grid
+grid.arrange(p1, p2, p3, p4, ncol=2)
+
+
+
+```
+
+> Evaluating the optimal number of clusters $K$ using different methods produces divergent results:
+>
+> -   Based on within-cluster inertia, an elbow is observed at $K=5$, followed by a second elbow at $K=7$.
+>
+> -   Using the silhouette criterion, the coefficient reaches its maximum at $K=2$.
+>
+> -   The Calinski-Harabasz coefficient reaches its maximum at $K=5$.
+>
+> -   Semi-Partial R-Squared shows a sharp decrease at $K=4$.
+>
+> Given these somewhat conflicting results, the final number of clusters for hierarchical clustering was set to $K=5$. This choice is used to define the final clusters in our analysis.
+
+```{r,include=T,echo=T,eval=T}
+res_ward_CAH_def = cutree(res_hc_ward, 5)
+fviz_dend(res_hc_ward,show_labels=FALSE,k=5)
+```
+> The resulting clusters are approximately balanced.
+
+```{r,include=T,echo=T,eval=T}
+# Display with ellipses
+fviz_pca_ind(acp_result,geom=c("point"),habillage=as.factor(res_ward_CAH_def),axes=c(1,2)) + theme(legend.position = "right")+ labs(title = "Projection of Hierarchical-Clustering Groups onto the First Two PCA Dimensions")
+```
+
+> The clusters are fairly well separated when projected onto the first two PCA dimensions. The rightmost cluster represents relatively high greenhouse-gas measurements, while the other clusters have values close to zero or below zero. This spatial distinction highlights a clear separation among the different categories of gas measurements and reveals substantial differences in gas concentrations between clusters.
+
+> We now compare the hierarchical clustering with the clustering obtained using K-means.
+
+```{r,include=T,echo=T,eval=T}
+table(res_ward_CAH_def,df_kmeans$Cluster_Kmeans_5_Centers)
+adjustedRandIndex(res_ward_CAH_def,df_kmeans$Cluster_Kmeans_5_Centers)
+```
+
+> The Adjusted Rand Index is 0.72, which is relatively close to its maximum value of 1. This suggests that the clusterings produced by K-means and hierarchical clustering are very similar. The contingency table also shows that observations are assigned to the same clusters by both methods. The two clusterings can therefore be considered equivalent, reinforcing the consistency of the results across clustering methods.
+
+## Gaussian Mixture Model
+
+
+
+### Model Selection
+
+#### BIC Criterion
+
+```{r,include=T,echo=T,eval=T}
+df_gmm = df[ind_pol]
+
+resmclus = Mclust(df_gmm, G = 2:100)
+summary(resmclus)
+```
+
+```{r,include=T,echo=T,eval=T,warnings=FALSE}
+fviz_mclust_bic(resmclus) + theme(plot.title = element_text(size=9) + theme(legend.position = "right") ) 
+
+```
+> The BIC criterion reaches its minimum at $K=59$ clusters, which is a relatively large number. Since Gaussian mixture models are primarily used for density estimation, it is not surprising that BIC selects a comparatively large number of clusters.
+
+Let's examine the ICL criterion.
+
+#### ICL Criterion
+
+```{r,include=T,echo=T,eval=T}
+modICL = mclustICL(df_gmm, G = 2:100)
+summary(modICL)
+```
+
+```{r,include=T,echo=T,eval=T}
+# Plot ICL values using a for loop
+
+kmin=2
+kmax=100
+
+ICL = list()
+
+for (k in kmin:kmax) {
+  ICL[[k]] = mclustICL(df_gmm, G = k, modelNames = "VEV")
+}
+
+Plot = ggplot() +
+  geom_line(data = data.frame(k = kmin:kmax, ICL = unlist(ICL)), aes(x = k, y = ICL), color = "blue") +
+  geom_point(data = data.frame(k = kmin:kmax, ICL = unlist(ICL)), aes(x = k, y = ICL)) +
+  labs(x = "Number of Clusters", y = "ICL",title = "ICL Criterion by Number of Clusters for the VEV Gaussian Mixture Model") +
+  theme(plot.title = element_text(size = 9))  
+
+print(Plot)
+
+```
+
+> The ICL criterion reaches its maximum at $K=59$ clusters. This suggests that the structure of our dataset may not support a reasonably small number of clusters under the BIC and ICL criteria.
+
+> We also note that the ICL curve forms an elbow around $K=50$ clusters.
+
+> To perform Gaussian-mixture clustering, we examine whether the EPCIs can be grouped by averaging their observations over the four years.
+
+#### Grouping by EPCI
+
+```{r,include=T,echo=T,eval=T}
+
+df_GMM_goupby = aggregate(df_gmm, by = list(df$lib_epci), FUN = mean)
+df_GMM_goupby = df_GMM_goupby[,-1]
+
+resmclus = Mclust(df_GMM_goupby, G = 1:100)
+summary(resmclus)
+```
+
+```{r}
+fviz_mclust_bic(resmclus) + theme(plot.title = element_text(size=9) + theme(legend.position = "right") )+
+    theme(axis.text.x = element_text(angle = -50, hjust = 1)) + labs(title = "BIC Criterion by Number of Clusters for the Gaussian Mixture Model")
+```
+> After grouping the EPCIs, the BIC criterion reaches its minimum at $K=6$ clusters, which is a reasonable number.
+
+
+
+```{r}
+# Perform clustering with six clusters
+resmclus = Mclust(df_GMM_goupby, G = 6, modelNames = "VVE")
+fviz_cluster(resmclus, data = df_GMM_goupby, ellipse=T,ellipse.type = "norm", ellipse.level = 0.95, geom = "point", palette = "viridis", ggtheme = theme_minimal())
+```
+> The six clusters obtained with the Gaussian mixture model are not well separated, as the confidence ellipses overlap substantially.
+
+> We can therefore conclude that the Gaussian mixture model does not effectively separate EPCIs according to their pollutant measurements.
+
+# Linear and Generalized Linear Models
+
+## Multiple Linear Regression: Greenhouse-Gas Emissions as a Function of Pollutants
+
+In this section, we fit a multiple linear regression model to predict greenhouse-gas emissions from pollutant measurements.
+
+The full model is expressed as follows:
+
+
+\[
+\begin{cases}
+\forall i \in \{1, \dots , N\}, & \text{ges_teqco2}_i = \beta_0 + \beta_1 \times \text{nox_t}_i + \beta_2 \times \text{so2_t}_i + \beta_3 \times \text{pm10_t}_i + \beta_4 \times \text{pm25_t}_i \\
+& + \beta_5 \times \text{nh3_t}_i + \beta_6 \times \text{ch4_t}_i + \beta_7 \times \text{co2_t}_i + \beta_8 \times \text{n2o_t}_i + \varepsilon_i \\
+
+\varepsilon_i \underset{i.i.d}{\sim} \mathcal{N}(0, \sigma^2) & \\
+\end{cases}
+\]
+
+
+
+```{r,include=T,echo=T,eval=T}
+ind_regmulti = c(4:14)
+df_regmulti = df[,ind_regmulti]
+
+```
+
+### Linear Regression Including All Variables
+
+```{r,include=T,echo=T,eval=T}
+mod_reg_multi = lm(ges_teqco2 ~ . ,data =df_regmulti)
+summary(mod_reg_multi)
+```
+
+
+First, the p-value for the test that all model coefficients are zero is below $10^{-16}$, which is extremely small. At a significance level of $\alpha=5\%$, we therefore reject the null hypothesis that all parameters $\betha_i$ are zero.
+
+The adjusted R-squared is 0.971, which is very close to 1. This means that the model explains the data very well.
+
+The individual tests of whether each parameter $\betha_i$ is zero also produce fairly small p-values. However, the p-value for the intercept is $0.86919$. This is expected because the data are centered.
+
+Let's examine whether the model can be simplified further.
+
+### Model Selection
+
+```{r,include=T,echo=T,eval=T}
+select = regsubsets(ges_teqco2 ~ . ,data =df_regmulti,nbest=1,nvmax=100,method="exhaustive")
+```
+
+```{r}
+par(mfrow=c(2,2))
+plot(select,scale="r2",main="Variable Selection Using the R2 Criterion")
+plot(select,scale="adjr2",main="Variable Selection Using the Adjusted R2 Criterion")
+plot(select,scale="Cp",main="Variable Selection Using the Cp Criterion")
+plot(select,scale="bic",main="Variable Selection Using the BIC Criterion")
+```
+> The different model-selection criteria produce different results:
+
+> * The $R^2$ criterion indicates that the model containing all variables is the best. This is expected because $R^2$ increases as variables are added.
+
+> * Adjusted $R^2$ also indicates that the full model is best. However, the six-variable model obtained by removing *co_t* and *c6h6_t* is very close to the full model.
+
+> * The $C_p$ criterion indicates that the model containing all variables is the best model.
+
+> * The BIC criterion indicates that the model without *co_t* and *c6h6_t* is the best model.
+
+> * However, the p-value for Student's test of whether the intercept is zero is high. None of the criteria allows us to select a model with a zero intercept, so we remove the intercept from the model.
+
+We ultimately retain the result obtained with BIC because BIC is the only criterion considered here that converges in probability to the correct model.
+
+We now perform a nested-model test to determine whether this simplification is acceptable.
+
+```{r}
+modbest = lm(ges_teqco2 ~ nox_t + so2_t + pm10_t + pm25_t + +nh3_t + ch4_t + co2_t + n2o_t -1 ,data=df_regmulti )
+summary(modbest)
+```
+
+```{r}
+anova(modbest,mod_reg_multi)
+```
+The p-value for the nested-model test is 0.07421. At a significance level of $\alpha=5\%$, we therefore do not reject the simplified model.
+
+We can therefore proceed with this simplified model.
+
+
+### Assumption Analysis
+
+
+```{r}
+autoplot(modbest,label.size=2, label.padding = unit(0.1, "lines"),colour = 'blue',smooth.colour = "red",ad.colour = "green",ad.linetype = "solid")
+```
+> * Residuals vs. Fitted:
+
+> > First, the variance of the residuals $\varepsilon_i$ is not constant. The leftmost points have substantially greater variance than the other points. This contradicts the homoscedasticity assumption required for a linear model.
+
+> > The mean of the residuals also does not appear to be zero, as the residuals are predominantly positive.
+
+> * Q-Q Plot:
+
+> The empirical quantiles do not follow the line $y=x$. In particular, the upper empirical quantiles are much larger than the corresponding theoretical quantiles of a standard normal distribution. This contradicts the normality assumption for the residuals.
+
+
+
+
+We now fit regularized Ridge and Lasso regressions, using cross-validation to select the best value of $\lambda$.
+
+### Ridge Regression
+
+#### Regularization Path
+
+
+```{r}
+library(glmnet)
+List_lambda = seq(0,1,0.001)
+df_ridge = df_regmulti
+Y_tilde = df_regmulti$ges_teqco2
+X_tilde = df_ridge[,-8]
+#df_ridge = df_ridge[,-c("ges_teqco2")]
+mod_ridge = glmnet(as.matrix(X_tilde),Y_tilde,lambda = List_lambda,alpha = 0,family = "gaussian",intercept = FALSE)
+Column_Lambda =  rep((mod_ridge$lambda),ncol(X_tilde))
+Column_Beta = as.vector(t(mod_ridge$beta))
+Column_Variable = rep(colnames(X_tilde),each = length(mod_ridge$lambda))
+df_plot = data.frame(lambda = Column_Lambda,beta = Column_Beta,variable = Column_Variable)
+ridge_cv = cv.glmnet(as.matrix(X_tilde),Y_tilde,alpha = 0,family = "gaussian",intercept = FALSE)
+g1 = ggplot(df_plot,aes(x = lambda,y = beta,color = variable)) + geom_line() + geom_point() + labs(title = "Regularisation Path for Ridge Regression",x = "Lambda",y = "Beta")
+best_lambda = ridge_cv$lambda.min
+g1  = g1 + geom_vline(xintercept = ridge_cv$lambda.min, linetype = "dashed", color = "red")
+
+
+```
+
+### Lasso Regression
+
+#### Regularization Path
+
+```{r,fig.height=8}
+library(glmnet)
+List_lambda = seq(0,1,0.0001)
+df_lasso = df_regmulti
+Y_tilde = df_regmulti$ges_teqco2
+X_tilde = df_lasso[,-8]
+#df_ridge = df_ridge[,-c("ges_teqco2")]
+mod_lasso = glmnet(as.matrix(X_tilde),Y_tilde,lambda = List_lambda,alpha = 1,family = "gaussian",intercept = FALSE)
+#Column_Lambda =  rep((mod_lasso$lambda),ncol(X_tilde))
+Column_Lambda =  rep(-log(mod_lasso$lambda),ncol(X_tilde))
+Column_Beta = as.vector(t(mod_lasso$beta))
+Column_Variable = rep(colnames(X_tilde),each = length(mod_lasso$lambda))
+df_plot = data.frame(lambda = Column_Lambda,beta = Column_Beta,variable = Column_Variable)
+lasso_cv = cv.glmnet(as.matrix(X_tilde),Y_tilde,alpha = 1,family = "gaussian",intercept = FALSE)
+g2 = ggplot(df_plot,aes(x = lambda,y = beta,color = variable)) + geom_line() + geom_point() + labs(title = "Regularisation Path for Lasso Regression",x = "-log(lambda)",y = "Beta")
+best_lambda = lasso_cv$lambda.min
+g2 = g2 + geom_vline(xintercept =  -log(best_lambda), linetype = "dashed", color = "red")
+
+
+# Display both plots
+
+grid.arrange(g1, g2, ncol = 1)
+
+```
+
+
+
+
+
+
+> Lasso Regression:
+
+Lasso regression can be used to select variables. However, with the value of $\lambda$ selected by cross-validation, the fitted Lasso model does not remove any variables because all coefficients remain nonzero.
+
+## Anova
+
+We model greenhouse-gas emissions as a function of EPCI type and year. We use a two-factor ANOVA model with interactions.
+
+```{r}
+modeleanova<-lm(ges_teqco2~TypeEPCI*annee_inv,data = data)
+modeleanovaadd<-lm(ges_teqco2~TypeEPCI+annee_inv,data = data)
+```
+
+We first perform a nested-model test to simplify the model, comparing the interaction model with the additive model without interactions.
+
+The resulting p-value, 'r anova(modeleanovaadd,modeleanova)[[5]][2]', is greater than 0.05, so we do not reject the null hypothesis. The model can therefore be simplified by removing the interaction.
+
+Next, we perform a nested-model test comparing the model containing EPCI type and year with the model containing only year.
+
+```{r}
+modeleannee<-lm(ges_teqco2~annee_inv,data = data)
+```
+
+The resulting p-value, 'r anova(modeleanovaadd,modeleannee)[[5]][2]', is below 0.05, so we reject the null hypothesis and retain the model containing EPCI type and year.
+
+We then perform a nested-model test comparing the model containing EPCI type and year with the model containing only EPCI type.
+
+```{r}
+modeletype<-lm(ges_teqco2~TypeEPCI,data = data)
+```
+
+The resulting p-value, 'r anova(modeleanovaadd,modeletype)[[5]][2]', is below 0.05. The original text states that the null hypothesis is not rejected, and the model containing EPCI type is retained.
+
+Finally, we perform a nested-model test comparing the model containing EPCI type with the intercept-only model.
+
+```{r}
+modelenull<-lm(ges_teqco2~1,data = data)
+```
+
+The resulting p-value, 'r anova(modelenull,modeletype)[[5]][2]', is below 0.05, so we reject the null hypothesis and retain the model containing EPCI type.
+
+### Interaction plot
+
+```{r}
+attach(data)
+interaction.plot(TypeEPCI,annee_inv,ges_teqco2,col=c(2,4),pch=c(18,24),main="Interaction Plot Between Type and Year",type="b")
+```
+
+The curves overlap, supporting the conclusion that year has no effect on greenhouse-gas emissions and can therefore be removed.
+
+## Ancova
+
+We model methane emissions as a function of EPCI type, year, ammonia, and carbon monoxide. We use a four-factor ANCOVA model with interactions.
+
+We first perform a nested-model test to simplify the model, comparing the full interaction model with the model containing no interactions.
+
+```{r}
+modeleancova<-lm(ch4_t~TypeEPCI*annee_inv*nh3_kg*co_kg,data = data)
+modeleancovasansinter<-lm(ch4_t~TypeEPCI+annee_inv+nh3_kg+co_kg,data = data)
+```
+
+The resulting p-value, 'r anova(modeleancovasansinter,modeleancova)[[5]][2]', is below 0.05, so we reject the null hypothesis and retain the model with interactions. We then attempt to simplify the model by removing the interactions one at a time.
+
+```{r}
+modeleancova_sans_type_inter<-lm(ch4_t~TypeEPCI+annee_inv*nh3_kg*co_kg,data = data)
+modeleancova_sans_annee_inter<-lm(ch4_t~annee_inv+TypeEPCI*nh3_kg*co_kg,data = data)
+modeleancova_sans_co_inter<-lm(ch4_t~co_kg+TypeEPCI*annee_inv*nh3_kg,data = data)
+modeleancova_sans_nh3_inter<-lm(ch4_t~nh3_kg+TypeEPCI*annee_inv*co_kg,data = data)
+```
+
+For the test that removes the interaction involving EPCI type, the p-value is 'r anova(modeleancova_sans_type_inter,modeleancova)[[5]][2]', which is below 0.05.
+
+For the test that removes the interaction involving year, the p-value is 'r anova(modeleancova_sans_annee_inter,modeleancova)[[5]][2]', which is greater than 0.05.
+
+For the test that removes the interaction involving CO, the p-value is 'r anova(modeleancova_sans_co_inter,modeleancova)[[5]][2]', which is greater than 0.05.
+
+For the test that removes the interaction involving NH3, the p-value is 'r anova(modeleancova_sans_nh3_inter,modeleancova)[[5]][2]', which is below 0.05.
+
+Among the two tests with p-values above 0.05, we retain the model associated with the larger p-value. We therefore retain the model without the interaction involving year.
+
+After removing the interaction involving year, we examine whether the model can be simplified further by removing the remaining interactions one at a time.
+
+```{r}
+modeleancova_sans_annee_typeinter<-lm(ch4_t~annee_inv+TypeEPCI+nh3_kg*co_kg,data = data)
+modeleancova_sans_annee_nh3inter<-lm(ch4_t~annee_inv+nh3_kg+TypeEPCI*co_kg,data = data)
+modeleancova_sans_annee_cointer<-lm(ch4_t~annee_inv+co_kg+nh3_kg*TypeEPCI,data = data)
+```
+
+For the test that removes the interaction involving EPCI type, the p-value is 'r anova(modeleancova_sans_annee_typeinter,modeleancova_sans_annee_inter)[[5]][2]', which is below 0.05.
+
+For the test that removes the interaction involving NH3, the p-value is 'r anova(modeleancova_sans_annee_nh3inter,modeleancova_sans_annee_inter)[[5]][2]', which is below 0.05.
+
+For the test that removes the interaction involving CO, the p-value is 'r anova(modeleancova_sans_annee_cointer,modeleancova_sans_annee_inter)[[5]][2]', which is below 0.05.
+
+We therefore retain the model without the interaction involving year. After examining the interactions, we assess the main effect of year; the other main effects are not examined separately because their interactions were retained.
+
+```{r}
+modeleancovasansannee<-lm(ch4_t~TypeEPCI*nh3_kg*co_kg,data = data)
+```
+
+The resulting p-value, 'r anova(modeleancovasansannee,modeleancovasansanneeinter)[[5]][2]', is below 0.05, so we reject the null hypothesis and retain the model with the year effect. In conclusion, we retain the year effect and the interactions involving all other variables.
+
+We do not use an automatic model-selection algorithm because it may retain interactions between variables while removing the corresponding main effects.
+
+## Generalized Linear Model
+
+### Data Frame Preparation
+
+
+
+```{r,results=F,echo=F,eval=T}
+df_mlg <- df 
+df_mlg[df$ch4_t_lda == 'Above', "ch4_t_mlg"] <- 1
+df_mlg[df$ch4_t_lda == 'Below', "ch4_t_mlg"] <- 0
+str(df_mlg$ch4_t_mlg)
+List_Variables_MLG = c("TypeEPCI","annee_inv","nh3_t","n2o_t","ch4_t_mlg")
+df_mlg = df_mlg[,List_Variables_MLG]
+```
+
+```{r,results=T,echo=T,eval=T}
+glm_mh4<-glm(ch4_t_mlg~ .^2,data = df_mlg,family = binomial(link = "logit"))
+summary(glm_mh4)
+```
+
+> A few *NA* values appear in the output of the generalized linear model. This is expected because there are not enough observations for the *CU* and *Metropole* categories of the variable *TypeEPCI*.
+
+> To solve this problem, we follow the same approach as in the *MCA*. We combine the *CU*, *Metropole*, and *CA* categories of *TypeEPCI* into a single category, *CA_CU_Metropole*.
+
+
+```{r,results=F,echo=F,eval=T}
+df_mlg$New_Type_EPCI = 'a'
+df_mlg[df_mlg$TypeEPCI == 'CU', 'New_Type_EPCI'] = 'CA_CU_Metropole'
+df_mlg[df_mlg$TypeEPCI == 'CC', 'New_Type_EPCI'] = 'CC'
+df_mlg[df_mlg$TypeEPCI == 'CA', 'New_Type_EPCI'] = 'CA_CU_Metropole'
+df_mlg[df_mlg$TypeEPCI == 'Metropole', 'New_Type_EPCI'] = 'CA_CU_Metropole'
+df_mlg=df_mlg[,-1]
+```
+
+### Full Model
+
+```{r}
+glm_mh4<-glm(ch4_t_mlg~ .^2,data = df_mlg,family = binomial(link = "logit"))
+summary(glm_mh4)
+```
+> After recoding the variable *TypeEPCI*, no $NA$ values remain in the generalized linear model output.
+
+> We note that the p-values for tests of the coefficients associated with the categories of the variable *AnneeInv* are very high. This suggests that
+
+> 
+
+### Model Selection
+
+#### AIC Criterion
+
+```{r,warning=F}
+
+stepAIC(glm_mh4, direction=c("backward"),k=2,trace=0) # AIC
+```
+
+
+> We reject the reduced model at the 5% significance level because the p-value is 2.076e-06. We therefore retain the model with interactions initially. We then examine whether further simplifications are possible. The `stepAIC` command does not suggest any additional simplification. Overall, the results indicate that methane emissions depend on ammonia, nitrous oxide, EPCI type, and year, with potential interactions among these variables. This complex model highlights the importance of considering several factors simultaneously when explaining and predicting methane-emission levels.
+
+
+
+#### BIC Criterion
+
+
+```{r,warning=F}
+stepAIC(glm_mh4, direction=c("backward"),k= log(nrow(df_mlg)),trace=0) # BIC
+```
+
+#### Nested-Model Tests
+
+
+
+```{r,warning=F}
+BestAIC = glm(formula = ch4_t_mlg ~ annee_inv + nh3_t + n2o_t + New_Type_EPCI + 
+    nh3_t:n2o_t + nh3_t:New_Type_EPCI + n2o_t:New_Type_EPCI, 
+    family = binomial(link = "logit"), data = df_mlg)
+
+anova(BestAIC,glm_mh4,test="Chisq")
+
+```
+
+
+
+```{r,warning=F}
+BestBIC = glm(formula = ch4_t_mlg ~ nh3_t + n2o_t + New_Type_EPCI + nh3_t:n2o_t + 
+    nh3_t:New_Type_EPCI + n2o_t:New_Type_EPCI, family = binomial(link = "logit"), 
+    data = df_mlg)
+
+
+
+anova(BestBIC,glm_mh4,test="Chisq")
+
+```
